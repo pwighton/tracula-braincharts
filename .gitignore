@@ -1,0 +1,17 @@
+# Upstream model files are downloaded at image build, never committed
+# (the checksum list will live in tracula_braincharts/data/)
+*.pkl
+*.zip
+
+# Python
+__pycache__/
+*.pyc
+*.egg-info/
+.pytest_cache/
+build/
+dist/
+.venv/
+
+# Scratch / local outputs
+scratch/
+*.log
