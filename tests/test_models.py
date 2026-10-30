@@ -1,3 +1,5 @@
+import itertools
+
 import numpy as np
 import pytest
 
@@ -24,7 +26,26 @@ def test_tracts_match_template_order():
 def test_training_sites():
     sites = models.training_sites()
     assert len(sites) == 19 and len(set(sites)) == 19
-    assert sites[0] == "UKB_11025" and sites[-1] == "HCPEP_3013"
+    assert sites == sorted(sites) and sites[0] == "HCPA_3002" and sites[-1] == "UKB_11028"
+
+
+@requires_models
+def test_site_columns_group_by_study(model_set):
+    """Sites of the same study (same protocol) have similar fitted site effects, if the column labels are right.
+
+    Distance between two site columns: the difference of their weights over the 48 tracts, in noise-SD units.
+    Same-study pairs average 0.30 of the all-pairs mean with the sorted labels; with the published file's
+    order they average 0.75, and none of 20000 random labellings went below 0.5.
+    """
+    W = np.array([np.ravel(nm.blr.m)[3:22] / np.exp(-np.ravel(nm.blr.hyp)[0] / 2)
+                  for nm in model_set.nms.values()]).T
+
+    def mean_distance(same_study):
+        return np.mean([np.linalg.norm(W[i] - W[j]) for i, j in itertools.combinations(range(19), 2)
+                        if same_study is None or same_study(i, j)])
+
+    study = [s.split("_")[0] for s in model_set.sites]
+    assert mean_distance(lambda i, j: study[i] == study[j]) < 0.5 * mean_distance(None)
 
 
 @requires_models

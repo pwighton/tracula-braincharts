@@ -30,4 +30,7 @@ done < "${checksums}"
 
 # The zip also holds macOS resource forks (__MACOSX/); skip them.
 unzip -q -o "${dest}/models/lifespan_fa_24K_19sites.zip" -x '__MACOSX/*' -d "${dest}/models"
+# The zip stores FA_50K_19sites/ as drwx------, and unzip keeps that; make everything readable so the
+# container works when run as the calling user.
+chmod -R a+rX "${dest}"
 echo "${UPSTREAM_COMMIT}" > "${dest}/UPSTREAM_COMMIT"

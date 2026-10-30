@@ -26,11 +26,16 @@ def tract_names(model_dir: Path = MODEL_DIR) -> list[str]:
 
 
 def training_sites(model_dir: Path = MODEL_DIR) -> list[str]:
-    """The 19 training site ids, in the order of the design matrix's site columns."""
-    return _read_lines(model_dir / SITES_FILE)
+    """The 19 training site ids, in the order of the design matrix's site columns.
+
+    The models were fitted without ``all_sites``, so ``create_design_matrix`` ordered the site columns
+    alphabetically (``sorted(pd.unique(site_ids))``). The published site list is in a different order, so it is
+    sorted here. Using it as published assigns each site another site's effect.
+    """
+    return sorted(_read_lines(model_dir / SITES_FILE))
 
 
-def _model_path(tract: str, model_dir: Path, filename: str) -> Path:
+def model_file(tract: str, model_dir: Path, filename: str) -> Path:
     return model_dir / MODELS_SUBDIR / tract / "Models" / filename
 
 
@@ -44,13 +49,13 @@ def _alias_norm_blr() -> None:
 def load_model(tract: str, model_dir: Path = MODEL_DIR):
     """Load one tract's ``NormBLR`` model."""
     _alias_norm_blr()
-    with open(_model_path(tract, model_dir, "NM_0_0_estimate.pkl"), "rb") as f:
+    with open(model_file(tract, model_dir, "NM_0_0_estimate.pkl"), "rb") as f:
         return pickle.load(f)
 
 
 def load_meta(tract: str, model_dir: Path = MODEL_DIR) -> dict:
     """Load one tract's metadata (a pickle named ``meta_data.md``): training mean/sd and scaler settings."""
-    with open(_model_path(tract, model_dir, "meta_data.md"), "rb") as f:
+    with open(model_file(tract, model_dir, "meta_data.md"), "rb") as f:
         return pickle.load(f)
 
 

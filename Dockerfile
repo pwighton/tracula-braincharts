@@ -34,10 +34,12 @@ COPY tests /opt/tracula-braincharts/src/tests
 WORKDIR /opt/tracula-braincharts/src
 
 # The container is normally run as the calling user (--user $(id -u):$(id -g)), who has no home
-# directory inside the image; point caches somewhere writable.
-ENV MPLCONFIGDIR=/tmp/matplotlib \
+# directory inside the image (HOME=/, not writable); point HOME and caches somewhere writable.
+# PyTensor (imported via pymc) isn't used for BLR: cxx= skips its C compiler and the missing-g++ warning.
+ENV HOME=/tmp \
+    MPLCONFIGDIR=/tmp/matplotlib \
     NUMBA_CACHE_DIR=/tmp/numba \
-    PYTENSOR_FLAGS=base_compiledir=/tmp/pytensor
+    PYTENSOR_FLAGS=base_compiledir=/tmp/pytensor,cxx=
 
 # Provenance: set by the Makefile at build time
 ARG GIT_SHA=unknown

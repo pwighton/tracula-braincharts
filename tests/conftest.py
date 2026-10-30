@@ -1,8 +1,11 @@
 import importlib.util
+from pathlib import Path
 
 import pytest
 
 from tracula_braincharts.config import MODEL_DIR, MODELS_SUBDIR
+
+FIXTURES = Path(__file__).parent / "fixtures"
 
 
 def _pcntoolkit_available() -> bool:
@@ -14,3 +17,9 @@ requires_pcntoolkit = pytest.mark.skipif(not _pcntoolkit_available(),
 
 requires_models = pytest.mark.skipif(not (_pcntoolkit_available() and (MODEL_DIR / MODELS_SUBDIR).is_dir()),
                                      reason="needs pcntoolkit 0.35 and the model files (run inside the container)")
+
+
+@pytest.fixture(scope="session")
+def model_set():
+    from tracula_braincharts.scoring import ModelSet
+    return ModelSet()

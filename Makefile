@@ -9,7 +9,7 @@ build:
 	docker build --build-arg GIT_SHA=$(GIT_SHA) --build-arg IMAGE_TAG=$(TAG) -t $(TAG) -t $(IMAGE):latest .
 
 test: build
-	docker run --rm --entrypoint pytest $(TAG) -q -p no:cacheprovider
+	docker run --rm --user $$(id -u):$$(id -g) --entrypoint pytest $(TAG) -q -p no:cacheprovider
 
 push: build
 	docker push $(TAG)
