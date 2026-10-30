@@ -10,7 +10,11 @@ readme = "README.md"
 license = {file = "LICENSE"}
 # pcntoolkit 0.35 (needed to load the model pickles) supports Python 3.10-3.12
 requires-python = ">=3.10,<3.13"
-dependencies = []
+dependencies = [
+    "pcntoolkit==0.35.0",
+    "numpy",
+    "pandas",
+]
 
 [project.optional-dependencies]
 dev = ["pytest>=7"]
@@ -20,6 +24,9 @@ tracula-braincharts = "tracula_braincharts.cli:main"
 
 [tool.setuptools.packages.find]
 include = ["tracula_braincharts*"]
+
+[tool.setuptools.package-data]
+tracula_braincharts = ["data/*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
