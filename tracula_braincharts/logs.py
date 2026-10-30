@@ -1,6 +1,7 @@
 """Logging for a subcommand run: timestamped messages on stderr and in a log file in the output directory."""
 
 import logging
+import os
 from pathlib import Path
 
 from .cli_errors import CliError
@@ -24,7 +25,12 @@ def start(out_dir: Path, filename: str) -> Path:
         out_dir.mkdir(parents=True, exist_ok=True)
         file_handler = logging.FileHandler(log_file, mode="w")
     except OSError as exc:
-        raise CliError(f"cannot write to output directory {out_dir}: {exc}") from exc
+        hint = ""
+        if out_dir.is_dir() and out_dir.stat().st_uid != os.getuid():
+            hint = (f"; it is owned by uid {out_dir.stat().st_uid} (docker creates a missing bind-mount directory "
+                    "as root: create it before docker run)")
+        raise CliError(f"cannot write to output directory {out_dir} (running as uid {os.getuid()}): {exc}{hint}") \
+            from exc
     stop()
     console = logging.StreamHandler()
     console.addFilter(lambda record: not getattr(record, "file_only", False))

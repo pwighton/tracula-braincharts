@@ -47,7 +47,8 @@ def build_parser() -> argparse.ArgumentParser:
     score.add_argument("--test", required=True, type=Path, metavar="TEST.csv",
                        help="subjects to score: portal template columns, optional leading 'subject' column")
     score.add_argument("--adapt", type=Path, metavar="ADAPT.csv",
-                       help="healthy controls from the test subjects' site(s), used for site adaptation")
+                       help="healthy controls for site adaptation, needed when a test site is not a training site; "
+                            "then every test site is adapted (as on the portal) and needs at least 2 controls")
     score.add_argument("-o", "--out", required=True, type=Path, metavar="DIR",
                        help="output directory (created if needed; existing outputs, including score.log, "
                             "are overwritten)")

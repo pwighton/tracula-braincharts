@@ -4,7 +4,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from conftest import FIXTURES, requires_models
+from conftest import FIXTURES, link_models, requires_models
 from tracula_braincharts import models
 from tracula_braincharts.cli import main
 from tracula_braincharts.cli_errors import CliError
@@ -23,9 +23,9 @@ def test_cohort():
 @pytest.fixture(scope="module")
 def results(model_set, test_cohort):
     from tracula_braincharts.scoring import score
-    res, warnings = score(model_set, test_cohort)
-    assert warnings == []
-    return res
+    scores = score(model_set, test_cohort)
+    assert scores.warnings == [] and scores.adaptation is None
+    return scores.results
 
 
 def test_one_row_per_subject_and_tract(results, test_cohort):
@@ -68,7 +68,7 @@ def test_median_fa_scores_zero(model_set, test_cohort, results):
     at_median = test_cohort.copy()
     p50 = results.pivot(index="subject", columns="tract", values="fa_p50").loc[test_cohort["subject"], TRACTS]
     at_median[TRACTS] = p50.to_numpy()
-    res, _ = score(model_set, at_median)
+    res = score(model_set, at_median).results
     np.testing.assert_allclose(res["z"], 0, atol=1e-8)
 
 
@@ -76,13 +76,7 @@ def test_matches_pcntoolkit_predict(model_set, test_cohort, results, tmp_path, m
     """Same z-scores as pcntoolkit.normative.predict, which is what the portal runs for training sites."""
     from pcntoolkit import normative
 
-    # normative.predict wants every model in one directory as NM_0_<i>_<suffix>.pkl, as on the portal. No
-    # meta_data.md: predict would index its training mean/sd by model number, but each tract's file covers only
-    # that tract. The models use no scalers, so predict does the same computation without it.
-    mdir = tmp_path / "Models"
-    mdir.mkdir()
-    for i, tract in enumerate(model_set.tracts):
-        (mdir / f"NM_0_{i}_estimate.pkl").symlink_to(models.model_file(tract, model_set.model_dir, "NM_0_0_estimate.pkl"))
+    mdir = link_models(model_set, tmp_path / "Models")
 
     filled = test_cohort.fillna(0.5)  # pcntoolkit's evaluation step doesn't take missing values
     X = models.design_matrix(filled["age"], filled["sex"], filled["site"], model_set.sites)
@@ -93,22 +87,22 @@ def test_matches_pcntoolkit_predict(model_set, test_cohort, results, tmp_path, m
                                       model_path=str(mdir), inputsuffix="estimate", outputsuffix="ref")
 
     from tracula_braincharts.scoring import score
-    ours, _ = score(model_set, filled)
+    ours = score(model_set, filled).results
     z = ours.pivot(index="subject", columns="tract", values="z").loc[filled["subject"], model_set.tracts]
     np.testing.assert_allclose(z.to_numpy(), Z, rtol=0, atol=1e-10)
 
 
 def test_unseen_site_needs_adaptation(model_set, test_cohort):
     from tracula_braincharts.scoring import score
-    with pytest.raises(CliError, match="not in the training set"):
+    with pytest.raises(CliError, match="not in the training set.*pass --adapt"):
         score(model_set, test_cohort.assign(site="MGH_Connectome"))
 
 
 def test_adaptation_data_ignored_for_training_sites(model_set, test_cohort, results):
     from tracula_braincharts.scoring import score
-    res, warnings = score(model_set, test_cohort, adapt=test_cohort)
-    assert any("not used" in w for w in warnings)
-    pd.testing.assert_frame_equal(res, results)
+    scores = score(model_set, test_cohort, adapt=test_cohort)
+    assert any("not used" in w for w in scores.warnings) and scores.adaptation is None
+    pd.testing.assert_frame_equal(scores.results, results)
 
 
 def test_cli_writes_outputs(tmp_path, capsys):
