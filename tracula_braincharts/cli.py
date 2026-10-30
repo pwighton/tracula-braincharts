@@ -17,7 +17,7 @@ from pathlib import Path
 
 from . import __version__, logs
 from .cli_errors import CliError
-from .config import MODEL_DIR
+from .config import MODEL_DIR, SKELETONS
 
 log = logging.getLogger("tracula_braincharts")
 
@@ -27,7 +27,7 @@ EXIT_USAGE = 2
 
 # Subcommand -> (help text, implementation step in the plan; None once implemented)
 SUBCOMMANDS = {
-    "extract": ("per subject: FA features, provenance and QA metrics", 5),
+    "extract": ("per subject: TBSS and mean skeleton FA per JHU label, with provenance and QA", None),
     "collate": ("build adapt.csv / test.csv and cohort QA tables from a manifest", 6),
     "score": ("z-scores and centiles for test.csv, adapted with adapt.csv", None),
     "x-val": ("cross-validated z-scores and adaptation QA for adapt.csv", None),
@@ -55,6 +55,20 @@ def build_parser() -> argparse.ArgumentParser:
     score.add_argument("--model-dir", type=Path, default=MODEL_DIR, metavar="DIR",
                        help=f"braincharts model files (default: {MODEL_DIR})")
 
+    extract = parsers["extract"]
+    extract.add_argument("subject_dir", type=Path, metavar="SUBJECT_DIR", help="Tracula subject directory")
+    extract.add_argument("-o", "--out", type=Path, metavar="DIR",
+                         help="write to DIR/<subject>/ (default: SUBJECT_DIR/fa-normative/); existing outputs, "
+                              "including tbss/ and extract.log, are overwritten")
+    extract.add_argument("--fa", type=Path, metavar="FA.nii.gz",
+                         help="FA map (with --bval; default: found from scripts/log.txt or dti/)")
+    extract.add_argument("--bval", type=Path, metavar="BVALS", help="b-values the FA map was fitted with")
+    extract.add_argument("--skeleton", choices=list(SKELETONS), default="fmrib58",
+                         help="skeleton for tbss_3_postreg: fmrib58 (-T, default) or subject (-S, the subject's own "
+                              "mean FA); controls and test subjects must use the same")
+    extract.add_argument("--allow-shells", action="store_true",
+                         help="extract even if the FA map isn't from b=0 + one shell in 800-1600")
+
     xval = parsers["x-val"]
     xval.add_argument("--adapt", required=True, type=Path, metavar="ADAPT.csv",
                       help="healthy controls (portal template columns, optional leading 'subject' column); every "
@@ -77,6 +91,15 @@ def _score(args) -> None:
     scoring.run(args.test, args.out, adapt_csv=args.adapt, model_dir=args.model_dir)
 
 
+def _extract(args) -> None:
+    from . import extract, inputs
+
+    inp = inputs.resolve(args.subject_dir, fa=args.fa, bval=args.bval)
+    out_dir = extract.output_dir(inp, args.out)
+    logs.start(out_dir, "extract.log")
+    extract.run_extract(inp, out_dir, skeleton=args.skeleton, allow_shells=args.allow_shells)
+
+
 def _x_val(args) -> None:
     from . import xval
 
@@ -84,7 +107,7 @@ def _x_val(args) -> None:
     xval.run(args.adapt, args.out, n_folds=args.folds, seed=args.seed, model_dir=args.model_dir)
 
 
-HANDLERS = {"score": _score, "x-val": _x_val}
+HANDLERS = {"extract": _extract, "score": _score, "x-val": _x_val}
 
 
 def main(argv=None) -> int:

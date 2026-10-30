@@ -27,3 +27,7 @@ AGE_XMAX = 110
 
 # Design matrix width: intercept + age + sex + 19 site columns + 7 B-spline columns.
 DESIGN_WIDTH = 29
+
+# extract --skeleton choice -> tbss_3_postreg option: the FMRIB58 standard skeleton (as UKB and, by its text, the
+# FA paper) or the subject's own mean-FA skeleton (as the training notebook's per-subject cell)
+SKELETONS = {"fmrib58": "-T", "subject": "-S"}

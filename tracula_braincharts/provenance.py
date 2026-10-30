@@ -32,7 +32,8 @@ def _version(dist: str):
         return None
 
 
-def base_record(command: str, model_dir: Path = MODEL_DIR) -> dict:
+def base_record(command: str, model_dir: Path | None = MODEL_DIR) -> dict:
+    """Common provenance fields; ``model_dir=None`` for commands that don't use the normative models."""
     return {
         "tool": "tracula-braincharts",
         "version": __version__,
@@ -40,9 +41,10 @@ def base_record(command: str, model_dir: Path = MODEL_DIR) -> dict:
         "image": os.environ.get("TRACULA_BRAINCHARTS_IMAGE"),
         "command": command,
         "created": datetime.now().astimezone().isoformat(timespec="seconds"),
-        "model": {"upstream_repo": UPSTREAM_REPO, "upstream_commit": UPSTREAM_COMMIT, "model_dir": str(model_dir)},
+        "model": ({"upstream_repo": UPSTREAM_REPO, "upstream_commit": UPSTREAM_COMMIT, "model_dir": str(model_dir)}
+                  if model_dir is not None else None),
         "software": {"python": platform.python_version(),
-                     **{name: _version(name) for name in ("pcntoolkit", "numpy", "pandas", "scipy")}},
+                     **{name: _version(name) for name in ("pcntoolkit", "numpy", "pandas", "scipy", "nibabel")}},
     }
 
 

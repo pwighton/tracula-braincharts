@@ -15,6 +15,8 @@ def test_subcommands_are_registered():
     args = build_parser().parse_args(["score", "--test", "t.csv", "-o", "out"])
     assert args.command == "score" and args.adapt is None
     assert build_parser().parse_args(["x-val", "--adapt", "a.csv", "-o", "out"]).command == "x-val"
+    args = build_parser().parse_args(["extract", "subj"])
+    assert args.command == "extract" and args.skeleton == "fmrib58" and args.out is None and not args.allow_shells
 
 
 def test_subcommand_is_required():

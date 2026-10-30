@@ -1,0 +1,43 @@
+# FSL 6.0.5.2's $FSLDIR/etc/fslconf/fslpython_environment.yml, with two changes so that it still resolves (the
+# Dockerfile copies this file over FSL's before running FSL's post_install.sh):
+#  - no `defaults` channel: Anaconda's channel needs its terms of service accepted and may need a licence; the
+#    environment is installed with Miniforge (conda-forge) instead of Miniconda.
+#  - no `fsl-tirl=v2.1.3b1`: with it, the 2022 pins no longer resolve (checked 2026-10-30). TIRL is FSL's
+#    histology-to-MRI registration library; nothing here uses it.
+# Everything else is FSL's list, unchanged.
+name: fslpython
+channels:
+ - conda-forge
+ - https://fsl.fmrib.ox.ac.uk/fsldownloads/fslconda/channel
+dependencies:
+ - eddy_qc=1.0.3
+ - fmrib-unpack=3
+ - fsl-add_module=0.3
+ - fsl-get_standard=0.1
+ - fsl_mrs=1.1
+ - fsl-pyfeeds=0.9
+ - fsl_sub=2.6.1
+ - fsl_sub_plugin_sge=1.5.0
+ - fsl_sub_plugin_slurm=1.4.1
+ - fsleyes=1.4
+ - fslpy=3.9
+ - ipython=8.3
+ - matplotlib=3.5
+ - mkl-service=2.3 # vtk conflicts with mkl-service 2.4, so keep at 2.3
+ - nidmresults=2.1.0
+ - nidmresults-fsl=2.2.0
+ - nibabel=3.2
+ - nilearn=0.9
+ - numpy=1.22
+ - pandas=1.4
+ - paramiko=2.10
+ - pip=22
+ - python=3.8
+ - pyyaml=5  # awscli (required by wire) pins pyyaml at <5.5, so keep at 5
+ - scikit-image=0.19
+ - scikit-learn=1.1
+ - scipy=1.8
+ - seaborn=0.11
+ - vtk=9.0
+ - wire=1.0.0
+ - wxpython=4.1.1
