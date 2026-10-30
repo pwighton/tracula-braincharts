@@ -30,7 +30,7 @@ SUBCOMMANDS = {
     "extract": ("per subject: FA features, provenance and QA metrics", 5),
     "collate": ("build adapt.csv / test.csv and cohort QA tables from a manifest", 6),
     "score": ("z-scores and centiles for test.csv, adapted with adapt.csv", None),
-    "x-val": ("cross-validated z-scores and adaptation QA for adapt.csv", 4),
+    "x-val": ("cross-validated z-scores and adaptation QA for adapt.csv", None),
 }
 
 
@@ -54,6 +54,19 @@ def build_parser() -> argparse.ArgumentParser:
                             "are overwritten)")
     score.add_argument("--model-dir", type=Path, default=MODEL_DIR, metavar="DIR",
                        help=f"braincharts model files (default: {MODEL_DIR})")
+
+    xval = parsers["x-val"]
+    xval.add_argument("--adapt", required=True, type=Path, metavar="ADAPT.csv",
+                      help="healthy controls (portal template columns, optional leading 'subject' column); every "
+                           "site must be new (not a training site)")
+    xval.add_argument("-o", "--out", required=True, type=Path, metavar="DIR",
+                      help="output directory (created if needed; existing outputs, including x-val.log, "
+                           "are overwritten)")
+    xval.add_argument("--folds", type=int, metavar="K",
+                      help="K-fold cross-validation within each site (default: leave-one-out)")
+    xval.add_argument("--seed", type=int, default=0, help="seed for assigning K-fold folds (default: 0)")
+    xval.add_argument("--model-dir", type=Path, default=MODEL_DIR, metavar="DIR",
+                      help=f"braincharts model files (default: {MODEL_DIR})")
     return parser
 
 
@@ -64,7 +77,14 @@ def _score(args) -> None:
     scoring.run(args.test, args.out, adapt_csv=args.adapt, model_dir=args.model_dir)
 
 
-HANDLERS = {"score": _score}
+def _x_val(args) -> None:
+    from . import xval
+
+    logs.start(args.out, "x-val.log")
+    xval.run(args.adapt, args.out, n_folds=args.folds, seed=args.seed, model_dir=args.model_dir)
+
+
+HANDLERS = {"score": _score, "x-val": _x_val}
 
 
 def main(argv=None) -> int:

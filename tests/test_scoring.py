@@ -63,6 +63,14 @@ def test_young_adult_has_higher_median_fa(results):
     assert (p50["sub-hcpya28m"] > p50["sub-hcpa75f"]).mean() >= 0.9
 
 
+def test_no_adaptation_means_no_correction(results):
+    np.testing.assert_array_equal(results["z_cal"], results["z"])
+    np.testing.assert_allclose(results["centile_cal"], results["centile"])
+    assert results["n_adapt"].isna().all()
+    for p in ("05", "95"):
+        np.testing.assert_array_equal(results[f"fa_p{p}_cal"], results[f"fa_p{p}"])
+
+
 def test_median_fa_scores_zero(model_set, test_cohort, results):
     from tracula_braincharts.scoring import score
     at_median = test_cohort.copy()
@@ -114,6 +122,7 @@ def test_cli_writes_outputs(tmp_path, capsys):
         assert "1 of 144 FA values missing" in text
     z = pd.read_csv(out / "z_test.csv")
     assert list(z.columns) == ID_COLUMNS + TRACTS and len(z) == 3
+    pd.testing.assert_frame_equal(pd.read_csv(out / "z_cal_test.csv"), z)  # no adaptation: no correction
     cent = pd.read_csv(out / "centiles_test.csv")
     assert len(cent) == 3 * 48
     prov = json.loads((out / "provenance.json").read_text())

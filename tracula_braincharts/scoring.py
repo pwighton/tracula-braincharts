@@ -8,6 +8,11 @@ Site adaptation (PCNtoolkit ``BLR.predict_and_adjust``, which the portal's trans
 is not a training site, every test site is adapted with the adaptation subjects from that site. Per tract, their
 residuals ``warp(fa) - yhat`` shift the predicted mean by the residuals' mean, and the residuals' SD (ddof 0)
 replaces the predictive SD.
+
+PCNtoolkit uses that mean and SD as if they were exact. With normal residuals, a new subject's z is then
+``sqrt((m+1)/(m-1)) * t(m-1)`` for m adaptation values, wider than N(0, 1): with m = 12, 9.3% of healthy subjects
+have |z| > 2. ``z``/``centile`` are kept as PCNtoolkit and the portal compute them. ``z_cal``/``centile_cal`` and the
+``_cal`` FA centiles use that t distribution instead (equal to the uncorrected ones without adaptation).
 """
 
 import logging
@@ -17,6 +22,7 @@ from typing import NamedTuple
 import numpy as np
 import pandas as pd
 from scipy.stats import norm
+from scipy.stats import t as student_t
 
 from . import models, provenance
 from .cli_errors import CliError
@@ -28,10 +34,13 @@ log = logging.getLogger(__name__)
 # Training age range (portal model README: 0-100 years)
 TRAINING_AGE_RANGE = (0.0, 100.0)
 
-# Centiles reported in FA units: column -> z
-CENTILE_COLUMNS = {"fa_p05": norm.ppf(0.05), "fa_p50": 0.0, "fa_p95": norm.ppf(0.95)}
+# Centiles reported in FA units: column -> probability. Uncorrected, and corrected for the number of adaptation
+# values (the median is the same either way).
+CENTILE_COLUMNS = {"fa_p05": 0.05, "fa_p50": 0.50, "fa_p95": 0.95}
+CAL_CENTILE_COLUMNS = {"fa_p05_cal": 0.05, "fa_p95_cal": 0.95}
 
-RESULT_COLUMNS = ["subject", "tract", "fa", "z", "centile", *CENTILE_COLUMNS, "yhat_warped", "s2_warped"]
+RESULT_COLUMNS = ["subject", "tract", "fa", "z", "centile", "z_cal", "centile_cal", "n_adapt",
+                  *CENTILE_COLUMNS, *CAL_CENTILE_COLUMNS, "yhat_warped", "s2_warped"]
 
 # predict_and_adjust needs at least 2 adaptation values per site to estimate a variance
 MIN_ADAPT = 2
@@ -69,6 +78,37 @@ class Scores(NamedTuple):
 
 def warp_params(nm) -> np.ndarray:
     return nm.blr.hyp[1:nm.blr.warp.get_n_params() + 1]
+
+
+def _t_scale(m: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+    """``(df, scale)``: with m adaptation values a new subject's z is ``scale * t(df)``."""
+    with np.errstate(divide="ignore", invalid="ignore"):
+        return m - 1, np.sqrt((m + 1) / (m - 1))
+
+
+def calibrate(z: np.ndarray, m: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+    """``(z_cal, p)``: the standard normal deviate with the same tail probability as z under ``scale * t(df)``, and
+    that lower-tail probability. Where m is NaN (no adaptation) z is unchanged and p = Phi(z)."""
+    z = np.asarray(z, dtype=float)
+    m = np.broadcast_to(np.asarray(m, dtype=float), z.shape)
+    z_cal, p = z.copy(), norm.cdf(z)
+    a = ~np.isnan(m) & ~np.isnan(z)
+    df, scale = _t_scale(m[a])
+    tz = z[a] / scale
+    p[a] = student_t.cdf(tz, df)
+    # upper tail via sf/isf, so that large z keep their precision
+    z_cal[a] = np.where(tz > 0, norm.isf(student_t.sf(tz, df)), norm.ppf(p[a]))
+    return z_cal, p
+
+
+def quantile_z(prob: float, m: np.ndarray) -> np.ndarray:
+    """The prob-th quantile of z: ``norm.ppf(prob)`` where m is NaN, else of ``scale * t(df)``."""
+    m = np.asarray(m, dtype=float)
+    q = np.full(m.shape, norm.ppf(prob))
+    a = ~np.isnan(m)
+    df, scale = _t_scale(m[a])
+    q[a] = scale * student_t.ppf(prob, df)
+    return q
 
 
 def predict(nm, X: np.ndarray, **adaptation) -> tuple[np.ndarray, np.ndarray]:
@@ -168,13 +208,20 @@ def score(model_set: ModelSet, test: pd.DataFrame, adapt: pd.DataFrame | None = 
                 if p["n"] < MIN_ADAPT:
                     warnings.append(f"{tract} at {site}: {p['n']} adaptation value(s), need {MIN_ADAPT}; "
                                     "z-scores left blank")
+            n_adapt = np.array([p["n"] for p in tract_params], dtype=float)[group_te.astype(int)]
         else:
             yhat, s2 = predict(nm, X_te)
-        z = (nm.blr.warp.f(fa, wp) - yhat) / np.sqrt(s2)
+            n_adapt = np.full(len(fa), np.nan)
+        sd = np.sqrt(s2)
+        z = (nm.blr.warp.f(fa, wp) - yhat) / sd
+        z_cal, p_cal = calibrate(z, n_adapt)
         part = pd.DataFrame({"subject": test["subject"].to_numpy(), "tract": tract, "fa": fa, "z": z,
-                             "centile": 100 * norm.cdf(z)})
-        for col, zp in CENTILE_COLUMNS.items():
-            part[col] = nm.blr.warp.invf(yhat + zp * np.sqrt(s2), wp)
+                             "centile": 100 * norm.cdf(z), "z_cal": z_cal, "centile_cal": 100 * p_cal,
+                             "n_adapt": pd.Series(n_adapt).astype("Int64")})
+        for col, prob in CENTILE_COLUMNS.items():
+            part[col] = nm.blr.warp.invf(yhat + norm.ppf(prob) * sd, wp)
+        for col, prob in CAL_CENTILE_COLUMNS.items():
+            part[col] = nm.blr.warp.invf(yhat + quantile_z(prob, n_adapt) * sd, wp)
         part["yhat_warped"] = yhat
         part["s2_warped"] = s2
         parts.append(part)
@@ -183,9 +230,9 @@ def score(model_set: ModelSet, test: pd.DataFrame, adapt: pd.DataFrame | None = 
     return Scores(results, adaptation, warnings)
 
 
-def z_wide(test: pd.DataFrame, results: pd.DataFrame, tracts: list[str]) -> pd.DataFrame:
-    """One row per test subject: ``subject, sex, age, site`` + one z column per tract (template order)."""
-    z = results.pivot(index="subject", columns="tract", values="z").reindex(index=test["subject"], columns=tracts)
+def z_wide(test: pd.DataFrame, results: pd.DataFrame, tracts: list[str], value: str = "z") -> pd.DataFrame:
+    """One row per test subject: ``subject, sex, age, site`` + one ``value`` column per tract (template order)."""
+    z = results.pivot(index="subject", columns="tract", values=value).reindex(index=test["subject"], columns=tracts)
     return pd.concat([test[ID_COLUMNS].reset_index(drop=True), z.reset_index(drop=True)], axis=1)
 
 
@@ -194,8 +241,8 @@ def _site_counts(df: pd.DataFrame) -> str:
 
 
 def run(test_csv: Path, out_dir: Path, adapt_csv: Path | None = None, model_dir: Path = MODEL_DIR) -> None:
-    """The ``score`` subcommand: read, score, write ``z_test.csv``, ``centiles_test.csv``, ``provenance.json``
-    and, with site adaptation, ``adaptation_params.csv``.
+    """The ``score`` subcommand: read, score, write ``z_test.csv``, ``z_cal_test.csv``, ``centiles_test.csv``,
+    ``provenance.json`` and, with site adaptation, ``adaptation_params.csv``.
 
     Progress and warnings are logged; the warnings are also recorded in the provenance.
     """
@@ -223,11 +270,13 @@ def run(test_csv: Path, out_dir: Path, adapt_csv: Path | None = None, model_dir:
     if missing.any():
         log.info("score: %d of %d FA values missing; their z-scores are left blank", missing.sum(), len(results))
     scored = results["z"].notna()
-    log.info("score: |z| > 2 for %d of %d z-scores", (results.loc[scored, "z"].abs() > 2).sum(), scored.sum())
+    log.info("score: |z| > 2 for %d of %d z-scores (|z_cal| > 2 for %d)", (results.loc[scored, "z"].abs() > 2).sum(),
+             scored.sum(), (results.loc[scored, "z_cal"].abs() > 2).sum())
 
     out_dir.mkdir(parents=True, exist_ok=True)
-    outputs = ["z_test.csv", "centiles_test.csv"]
+    outputs = ["z_test.csv", "z_cal_test.csv", "centiles_test.csv"]
     z_wide(test, results, model_set.tracts).to_csv(out_dir / "z_test.csv", index=False)
+    z_wide(test, results, model_set.tracts, "z_cal").to_csv(out_dir / "z_cal_test.csv", index=False)
     results.to_csv(out_dir / "centiles_test.csv", index=False)
     if adaptation is not None:
         adaptation.to_csv(out_dir / "adaptation_params.csv", index=False)

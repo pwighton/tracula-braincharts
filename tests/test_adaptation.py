@@ -16,7 +16,7 @@ from tracula_braincharts import models
 from tracula_braincharts.cli import main
 from tracula_braincharts.cli_errors import CliError
 from tracula_braincharts.cohort import read_cohort
-from tracula_braincharts.scoring import ADAPTATION_COLUMNS, predict, score
+from tracula_braincharts.scoring import ADAPTATION_COLUMNS, calibrate, predict, score
 
 ADAPT = FIXTURES / "adapt-new-site.csv"
 TEST = FIXTURES / "test-new-site.csv"
@@ -47,6 +47,18 @@ def test_outputs(scores, model_set):
     params = scores.adaptation
     assert list(params.columns) == ADAPTATION_COLUMNS and len(params) == 48 and set(params["site"]) == {"NEW_SITE"}
     assert params.set_index("tract")["n"].to_dict() == {t: 11 if t == MISSING_TRACT else 12 for t in model_set.tracts}
+
+
+def test_z_corrected_for_number_of_controls(scores):
+    r = scores.results
+    assert r.loc[r["tract"] == MISSING_TRACT, "n_adapt"].eq(11).all()
+    assert r.loc[r["tract"] != MISSING_TRACT, "n_adapt"].eq(12).all()
+    z_cal, p = calibrate(r["z"].to_numpy(), r["n_adapt"].to_numpy(dtype=float))
+    np.testing.assert_allclose(r["z_cal"], z_cal)
+    np.testing.assert_allclose(r["centile_cal"], 100 * p)
+    # the correction pulls z toward 0 and widens the normal range
+    assert (r["z_cal"].abs() < r["z"].abs()).all()
+    assert (r["fa_p05_cal"] < r["fa_p05"]).all() and (r["fa_p95_cal"] > r["fa_p95"]).all()
 
 
 def test_adaptation_shifts_mean_and_sets_sd(model_set, test_new, scores):
@@ -139,9 +151,11 @@ def test_cli_with_adaptation(tmp_path):
     assert main(["score", "--test", str(TEST), "--adapt", str(ADAPT), "-o", str(out)]) == 0
     params = pd.read_csv(out / "adaptation_params.csv")
     assert list(params.columns) == ADAPTATION_COLUMNS and len(params) == 48
+    z, z_cal = pd.read_csv(out / "z_test.csv"), pd.read_csv(out / "z_cal_test.csv")
+    assert z_cal.shape == z.shape and (z_cal.iloc[:, 4:].abs() < z.iloc[:, 4:].abs()).all().all()
     prov = json.loads((out / "provenance.json").read_text())
     assert prov["mode"] == "site-adaptation" and prov["unseen_sites"] == ["NEW_SITE"]
     assert prov["adaptation_subjects"] == {"NEW_SITE": 12} and prov["warnings"] == []
     log_text = (out / "score.log").read_text()
     assert "INFO score: site adaptation" in log_text and "NEW_SITE: over 48 tracts, median offset" in log_text
-    assert "wrote z_test.csv, centiles_test.csv, adaptation_params.csv, provenance.json" in log_text
+    assert "wrote z_test.csv, z_cal_test.csv, centiles_test.csv, adaptation_params.csv, provenance.json" in log_text
