@@ -17,7 +17,7 @@ from pathlib import Path
 
 from . import __version__, logs
 from .cli_errors import CliError
-from .config import MODEL_DIR, SKELETONS
+from .config import MODEL_DIR, SKELETONS, WARN_ADAPT_BELOW
 
 log = logging.getLogger("tracula_braincharts")
 
@@ -28,7 +28,7 @@ EXIT_USAGE = 2
 # Subcommand -> (help text, implementation step in the plan; None once implemented)
 SUBCOMMANDS = {
     "extract": ("per subject: TBSS and mean skeleton FA per JHU label, with provenance and QA", None),
-    "collate": ("build adapt.csv / test.csv and cohort QA tables from a manifest", 6),
+    "collate": ("build adapt.csv / test.csv and cohort QA tables from a manifest", None),
     "score": ("z-scores and centiles for test.csv, adapted with adapt.csv", None),
     "x-val": ("cross-validated z-scores and adaptation QA for adapt.csv", None),
 }
@@ -69,6 +69,20 @@ def build_parser() -> argparse.ArgumentParser:
     extract.add_argument("--allow-shells", action="store_true",
                          help="extract even if the FA map isn't from b=0 + one shell in 800-1600")
 
+    collate = parsers["collate"]
+    collate.add_argument("manifest", type=Path, metavar="MANIFEST.csv",
+                         help="columns subject, extract_dir, age, sex (0 female, 1 male), site, role (adapt, test or "
+                              "exclude); extract_dir is an extract output folder, relative to the manifest's folder "
+                              "unless absolute")
+    collate.add_argument("-o", "--out", required=True, type=Path, metavar="DIR",
+                         help="output directory (created if needed; existing outputs, including collate.log, "
+                              "are overwritten)")
+    collate.add_argument("--warn-adapt-below", type=int, default=WARN_ADAPT_BELOW, metavar="N",
+                         help=f"warn when an adapted site has fewer than N adaptation subjects (default: "
+                              f"{WARN_ADAPT_BELOW}; fewer than 2 is an error)")
+    collate.add_argument("--model-dir", type=Path, default=MODEL_DIR, metavar="DIR",
+                         help=f"braincharts model files, for the training sites (default: {MODEL_DIR})")
+
     xval = parsers["x-val"]
     xval.add_argument("--adapt", required=True, type=Path, metavar="ADAPT.csv",
                       help="healthy controls (portal template columns, optional leading 'subject' column); every "
@@ -100,6 +114,13 @@ def _extract(args) -> None:
     extract.run_extract(inp, out_dir, skeleton=args.skeleton, allow_shells=args.allow_shells)
 
 
+def _collate(args) -> None:
+    from . import collate
+
+    logs.start(args.out, "collate.log")
+    collate.run(args.manifest, args.out, model_dir=args.model_dir, warn_adapt_below=args.warn_adapt_below)
+
+
 def _x_val(args) -> None:
     from . import xval
 
@@ -107,7 +128,7 @@ def _x_val(args) -> None:
     xval.run(args.adapt, args.out, n_folds=args.folds, seed=args.seed, model_dir=args.model_dir)
 
 
-HANDLERS = {"extract": _extract, "score": _score, "x-val": _x_val}
+HANDLERS = {"extract": _extract, "collate": _collate, "score": _score, "x-val": _x_val}
 
 
 def main(argv=None) -> int:

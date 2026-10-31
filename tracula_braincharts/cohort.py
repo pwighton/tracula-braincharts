@@ -29,7 +29,11 @@ def read_cohort(path: Path) -> pd.DataFrame:
         df = pd.read_csv(path, dtype={"subject": str, "site": str})
     except (OSError, ValueError) as exc:
         raise CliError(f"cannot read {path}: {exc}") from exc
+    return check_cohort(df, str(path))
 
+
+def check_cohort(df: pd.DataFrame, path: str) -> pd.DataFrame:
+    """Validate a cohort table (``path`` names it in errors); returns ``subject, sex, age, site`` + the 48 tracts."""
     missing = [c for c in ["sex", "age", "site", *TRACTS] if c not in df.columns]
     if missing:
         raise CliError(f"{path}: missing columns: {_list(missing)}")

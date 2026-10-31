@@ -31,3 +31,6 @@ DESIGN_WIDTH = 29
 # extract --skeleton choice -> tbss_3_postreg option: the FMRIB58 standard skeleton (as UKB and, by its text, the
 # FA paper) or the subject's own mean-FA skeleton (as the training notebook's per-subject cell)
 SKELETONS = {"fmrib58": "-T", "subject": "-S"}
+
+# collate warns when an adapted site has fewer adaptation subjects than this (fewer than 2 is an error)
+WARN_ADAPT_BELOW = 10
