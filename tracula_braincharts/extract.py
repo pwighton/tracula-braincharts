@@ -6,6 +6,7 @@ As in the training data (``fa_normative_modeling/01.diffusion_processing.ipynb``
 The skeletonised FA is on the JHU atlas's 1 mm MNI152 grid, so ``fslstats -K`` needs no resampling (checked).
 The atlas's labels are matched to the model's 48 tracts by name: FSL 6.0.5's atlas has 50 labels, and the training
 data's means fit its labels 1-44 and 47-50 (the inferior fronto-occipital fasciculus, 45/46, isn't in the model).
+QA metrics (``qa.py``) go into ``provenance.json``, with two images in ``qc/``.
 """
 
 import logging
@@ -21,7 +22,7 @@ import nibabel as nib
 import numpy as np
 import pandas as pd
 
-from . import inputs, models, provenance
+from . import inputs, models, plots, provenance, qa
 from .cli_errors import CliError
 from .config import SKELETONS
 
@@ -35,7 +36,7 @@ JHU_XML = "data/atlases/JHU-labels.xml"
 TEMPLATES = ["data/standard/FMRIB58_FA_1mm.nii.gz", "data/standard/FMRIB58_FA-skeleton_1mm.nii.gz"]
 
 LABEL_QC_COLUMNS = ["tract", "label", "atlas_voxels", "skeleton_voxels", "nonzero_voxels", "coverage_pct",
-                    "fa_mean", "fa_sd", "fa_min", "fa_max"]
+                    "template_skeleton_voxels", "template_in_mask_pct", "fa_mean", "fa_sd", "fa_min", "fa_max"]
 
 
 def fsl_dir() -> Path:
@@ -98,26 +99,43 @@ def _same_grid(a: nib.Nifti1Image, b: nib.Nifti1Image) -> bool:
     return a.shape[:3] == b.shape[:3] and np.allclose(a.affine, b.affine, atol=1e-4)
 
 
-def label_qc(skeletonised: Path, skeleton_mask: Path, labels: Path, mapping: dict[str, int]) -> pd.DataFrame:
-    """Per label: atlas voxels, skeleton voxels, voxels with projected FA > 0, coverage, and FA statistics."""
+def label_qc(skeletonised: Path, skeleton_mask: Path, labels: Path, mapping: dict[str, int],
+             fa_mask: Path | None = None, template_skeleton: Path | None = None) -> pd.DataFrame:
+    """Per label: atlas voxels, skeleton voxels, those with projected FA > 0 (coverage), and FA statistics. With
+    ``fa_mask`` (TBSS's ``mean_FA_mask``) and ``template_skeleton`` (FMRIB58's): the % of the label's template skeleton
+    inside the subject's warped FA, which shows a cut-off field of view in both skeleton modes (with ``-T`` the
+    skeleton mask is the template's whatever the subject covers)."""
     skel_img, mask_img, lab_img = nib.load(skeletonised), nib.load(skeleton_mask), nib.load(labels)
-    for name, img in (("skeletonised FA", skel_img), ("skeleton mask", mask_img)):
+    others = [("skeletonised FA", skel_img), ("skeleton mask", mask_img)]
+    others += [(name, nib.load(p)) for name, p in (("FA mask", fa_mask), ("template skeleton", template_skeleton))
+               if p is not None]
+    for name, img in others:
         if not _same_grid(img, lab_img):
             raise CliError(f"{name} is not on the JHU atlas grid ({img.shape}, {lab_img.shape}): cannot use -K")
     fa = np.asarray(skel_img.dataobj, dtype=float).squeeze()
     on_skeleton = np.asarray(mask_img.dataobj).squeeze() > 0
     lab = np.asarray(lab_img.dataobj).astype(int)
+    in_fa = np.asarray(nib.load(fa_mask).dataobj).squeeze() > 0 if fa_mask is not None else None
+    # FMRIB58 values are FA x 10000; tbss_4_prestats -T thresholds the raw values, as here
+    tskel = (np.asarray(nib.load(template_skeleton).dataobj).squeeze() > SKELETON_THRESHOLD
+             if template_skeleton is not None else None)
     rows = []
     for tract, value in mapping.items():
         in_label = lab == value
         skel = in_label & on_skeleton
         vals = fa[in_label & (fa != 0)]
         n_skel = int(skel.sum())
-        rows.append({"tract": tract, "label": value, "atlas_voxels": int(in_label.sum()), "skeleton_voxels": n_skel,
-                     "nonzero_voxels": len(vals),
-                     "coverage_pct": 100 * int((skel & (fa != 0)).sum()) / n_skel if n_skel else np.nan,
-                     "fa_mean": vals.mean() if len(vals) else np.nan, "fa_sd": vals.std() if len(vals) else np.nan,
-                     "fa_min": vals.min() if len(vals) else np.nan, "fa_max": vals.max() if len(vals) else np.nan})
+        row = {"tract": tract, "label": value, "atlas_voxels": int(in_label.sum()), "skeleton_voxels": n_skel,
+               "nonzero_voxels": len(vals),
+               "coverage_pct": 100 * int((skel & (fa != 0)).sum()) / n_skel if n_skel else np.nan,
+               "template_skeleton_voxels": np.nan, "template_in_mask_pct": np.nan,
+               "fa_mean": vals.mean() if len(vals) else np.nan, "fa_sd": vals.std() if len(vals) else np.nan,
+               "fa_min": vals.min() if len(vals) else np.nan, "fa_max": vals.max() if len(vals) else np.nan}
+        if tskel is not None and in_fa is not None:
+            t = tskel & in_label
+            row["template_skeleton_voxels"] = int(t.sum())
+            row["template_in_mask_pct"] = 100 * int((t & in_fa).sum()) / int(t.sum()) if t.any() else np.nan
+        rows.append(row)
     return pd.DataFrame(rows, columns=LABEL_QC_COLUMNS)
 
 
@@ -140,7 +158,8 @@ def output_dir(inp: inputs.Inputs, out: Path | None) -> Path:
 
 
 def run_extract(inp: inputs.Inputs, out_dir: Path, skeleton: str = "fmrib58", allow_shells: bool = False) -> None:
-    """Run TBSS and write ``features.json``, ``label_qc.csv``, ``provenance.json`` and ``tbss/`` to ``out_dir``."""
+    """Run TBSS and write ``features.json``, ``label_qc.csv``, ``provenance.json`` (with the QA metrics, ``qa``),
+    ``qc/*.png`` and ``tbss/`` to ``out_dir``."""
     fsldir = fsl_dir()
     log.info("extract: subject %s (%s); FA %s; b-values %s (found via %s%s)", inp.subject, inp.subject_dir, inp.fa,
              inp.bval, inp.method, f", scripts/log.txt line {inp.log_line}" if inp.log_line else "")
@@ -161,6 +180,24 @@ def run_extract(inp: inputs.Inputs, out_dir: Path, skeleton: str = "fmrib58", al
         {"delta_ms": None, "reason": "not exactly one shell"}
     log.info("extract: b=0 volumes %d; shells %s; Delta %s ms", sh.n_b0,
              ", ".join(f"b={s['b']:.0f} ({s['n']} vols)" for s in sh.shells), delta["delta_ms"])
+
+    # QA of the inputs: native FA, its DWI, and eddy's outputs when present
+    shell_b = sh.shells[0]["b"] if len(sh.shells) == 1 else None
+    qa_native = qa.native_qa(inp.fa, inp.mask, inp.dwi, bvals)
+    log.info("extract: QA FA: brain mask %s ml, FA > 1 in %d voxels, white-matter median FA %s, b0 tSNR %s",
+             qa_native["mask_volume_ml"], qa_native["fa_above_1_voxels"], qa_native["wm_median_fa"],
+             qa_native["b0_tsnr_median"])
+    qa_eddy = qa.eddy_qa(inp.subject_dir, bvals, shell_b)
+    if "reason" in qa_eddy:
+        log.info("extract: QA eddy: %s", qa_eddy["reason"])
+    else:
+        motion = qa_eddy.get("movement_rms", {})
+        log.info("extract: QA eddy: %d volumes (FA %s); motion abs/rel mean %s / %s mm (FA volumes %s / %s); "
+                 "outlier slices %s%%; b=%s CNR %s", qa_eddy["volumes"], qa_eddy["fa_volumes"],
+                 motion.get("all", {}).get("abs_mean_mm"), motion.get("all", {}).get("rel_mean_mm"),
+                 motion.get("fa_volumes", {}).get("abs_mean_mm"), motion.get("fa_volumes", {}).get("rel_mean_mm"),
+                 qa_eddy.get("outliers", {}).get("all_dwi_slices_pct"), qa_eddy.get("cnr", {}).get("shell_b"),
+                 qa_eddy.get("cnr", {}).get("shell_cnr_median"))
 
     # JHU labels vs the template's tract columns
     tracts = models.template_columns()[4:]
@@ -187,18 +224,29 @@ def run_extract(inp: inputs.Inputs, out_dir: Path, skeleton: str = "fmrib58", al
 
     # Features: fslstats -K as in training, cross-checked against our own per-label statistics
     labels = fsldir / JHU_LABELS
-    qc = label_qc(skeletonised, skeleton_mask, labels, mapping)
+    qc = label_qc(skeletonised, skeleton_mask, labels, mapping, work / "stats" / "mean_FA_mask.nii.gz",
+                  fsldir / TEMPLATES[1])
     means = fslstats_means(skeletonised, labels, [mapping[t] for t in tracts], work)
     if not np.allclose(means, qc["fa_mean"].to_numpy(), atol=1e-5, equal_nan=True):
         raise RuntimeError("fslstats -K means differ from the per-label means computed from the image")
     missing = [t for t, v in zip(tracts, means) if np.isnan(v)]
-    if missing:
-        warnings.append(f"no skeleton FA in {len(missing)} label(s): {', '.join(missing)}")
-    partial = qc.loc[qc["coverage_pct"] < 100, "tract"].tolist()
-    if partial:
-        warnings.append(f"skeleton coverage below 100% in {len(partial)} label(s): {', '.join(partial)}")
+
+    # QA of registration and projection, flags, images
+    qa_reg = qa.registration_qa(work, fsldir, run)
+    qa_skel = qa.skeleton_qa(work, SKELETON_THRESHOLD)
+    jac = qa_reg["jacobian"]
+    log.info("extract: QA registration: r %s (white matter %s); template brain covered %s%%; Jacobian %s-%s "
+             "(%d <= 0); FLIRT average scaling %s", qa_reg["r_brain"], qa_reg["r_wm"],
+             qa_reg["template_brain_coverage_pct"], jac["min"], jac["max"], jac["nonpositive_voxels"],
+             qa_reg["flirt"]["average_scaling"])
+    log.info("extract: QA skeleton: %d voxels; %s%% without FA, %s%% of the rest below %g; mean projection gain %s",
+             qa_skel["voxels"], qa_skel["zero_pct"], qa_skel["below_threshold_pct"], SKELETON_THRESHOLD,
+             qa_skel["projection_gain_mean"])
+    qa_flags = qa.flags(qa_native, qa_reg, qc)
+    warnings += [f"QA {name}: {detail}" for name, detail in qa_flags.items()]
     for w in warnings:
         log.warning("extract: %s", w)
+    images = qc_images(inp.subject, work, fsldir, qa_reg, qa_skel, skeleton, out_dir / "qc")
 
     features = {t: (None if np.isnan(v) else round(float(v), 6)) for t, v in zip(tracts, means)}
     provenance.write({"subject": inp.subject, "skeleton": skeleton, "features": features}, out_dir / "features.json")
@@ -216,7 +264,37 @@ def run_extract(inp: inputs.Inputs, out_dir: Path, skeleton: str = "fmrib58", al
                       "tbss_3_postreg": SKELETONS[skeleton], "threshold": SKELETON_THRESHOLD,
                       "jhu_labels_not_used": {str(v): n for v, n in unused.items()},
                       "files": {rel: provenance.file_info(fsldir / rel) for rel in [JHU_LABELS, JHU_XML, *TEMPLATES]}}
+    record["qa"] = {"fa": qa_native, "eddy": qa_eddy, "registration": qa_reg, "skeleton": qa_skel, "flags": qa_flags,
+                    "images": [str(p.relative_to(out_dir)) for p in images]}
     record["warnings"] = warnings
     provenance.write(record, out_dir / "provenance.json")
-    log.info("extract: %d of %d tracts have a value; wrote features.json, label_qc.csv, provenance.json, tbss/ to %s",
-             len(tracts) - len(missing), len(tracts), out_dir)
+    log.info("extract: %d of %d tracts have a value; %d QA flag(s); wrote features.json, label_qc.csv, "
+             "provenance.json, qc/, tbss/ to %s", len(tracts) - len(missing), len(tracts), len(qa_flags), out_dir)
+
+
+def qc_images(subject: str, work: Path, fsldir: Path, qa_reg: dict, qa_skel: dict, skeleton: str,
+              qc_dir: Path) -> list[Path]:
+    """``qc/registration.png`` (warped FA with the template's white-matter outline) and ``qc/skeleton.png``
+    (projected skeleton FA over the JHU label boundaries)."""
+    qc_dir.mkdir(exist_ok=True)
+    template = nib.load(fsldir / TEMPLATES[0])
+    affine = template.affine
+
+    def data(path):
+        return np.asarray(nib.load(path).dataobj, dtype=float).squeeze()
+
+    def fmt(x, spec):
+        return "n/a" if x is None else format(x, spec)
+
+    warped = data(work / "stats" / "all_FA.nii.gz")
+    paths = [qc_dir / "registration.png", qc_dir / "skeleton.png"]
+    plots.registration_panels(
+        warped, data(fsldir / TEMPLATES[0]) / 10000, affine,
+        f"{subject}: warped FA and the FMRIB58 white-matter outline (r {fmt(qa_reg['r_wm'], '.3f')} in white "
+        f"matter, template brain {fmt(qa_reg['template_brain_coverage_pct'], '.1f')}% covered)", paths[0])
+    plots.skeleton_panels(
+        warped, data(work / "stats" / "mean_FA_skeleton_mask.nii.gz"),
+        data(work / "stats" / "all_FA_skeletonised.nii.gz"), data(fsldir / JHU_LABELS), affine,
+        f"{subject}: skeleton FA ({skeleton} skeleton; {fmt(qa_skel['zero_pct'], '.2f')}% without FA, "
+        f"{fmt(qa_skel['below_threshold_pct'], '.1f')}% below {SKELETON_THRESHOLD:g})", paths[1])
+    return paths

@@ -156,4 +156,11 @@ def test_extract_end_to_end(tmp_path):
     prov = json.loads((out / "provenance.json").read_text())
     assert prov["tbss"]["fsl_version"].startswith("6.0.5.2") and prov["inputs"]["method"] == "glob"
     assert set(prov["tbss"]["jhu_labels_not_used"]) == {"45", "46"}
+    q = prov["qa"]
+    assert q["eddy"]["reason"].startswith("0 eddy/results") and q["fa"]["b0_tsnr_median"] is None
+    assert q["registration"]["r_wm"] > 0.95 and q["registration"]["jacobian"]["nonpositive_voxels"] == 0
+    assert q["skeleton"]["voxels"] == int(skel.sum()) and "fa_nonfinite" not in q["flags"]
+    assert q["images"] == ["qc/registration.png", "qc/skeleton.png"]
+    assert all((out / image).stat().st_size > 10_000 for image in q["images"])
+    assert (qc["template_skeleton_voxels"] > 0).all()
     assert "$ tbss_4_prestats 0.2" in (out / "extract.log").read_text()
